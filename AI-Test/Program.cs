@@ -11,6 +11,14 @@ using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Khi ch?y trong container (Production), l?ng nghe ?úng c?ng mà Render c?p qua bi?n PORT.
+// Khi ch?y local (Development), gi? nguyên launchSettings.json nh? c?.
+if (!builder.Environment.IsDevelopment())
+{
+    var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
+    builder.WebHost.UseUrls($"http://+:{port}");
+}
+
 builder.Services.AddControllers();
 builder.Services.AddHttpClient<AiService>(client =>
 {
@@ -44,8 +52,16 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
+// Ch?n provider DB theo c?u hình: "SqlServer" (m?c ??nh, dùng local) ho?c "Sqlite" (b?n deploy demo)
+var dbProvider = builder.Configuration["Database:Provider"] ?? "SqlServer";
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection")));
+{
+    var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+    if (dbProvider == "Sqlite")
+        options.UseSqlite(connectionString);
+    else
+        options.UseSqlServer(connectionString);
+});
 
 builder.Services.AddScoped<AuthService>();
 
@@ -67,7 +83,6 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 
 builder.Services.AddAuthorization();
 
-// Rate limiting: gi?i h?n 20 request/phút cho m?i user (theo userId n?u ?ã ??ng nh?p, theo IP n?u ch?a)
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -93,12 +108,28 @@ app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseSwagger();
 app.UseSwaggerUI();
 
-app.UseHttpsRedirection();
+// Ch? ép HTTPS khi ch?y local. Sau khi deploy, Render ?ã x? lý TLS ? l?p ngoài r?i.
+if (app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
 
 app.UseAuthentication();
 app.UseRateLimiter();
 app.UseAuthorization();
 
 app.MapControllers();
+
+// Kh?i t?o database khi ?ng d?ng ch?y:
+// - SQL Server (local): áp d?ng migration ?ã t?o s?n t? B??c 2.
+// - SQLite (b?n deploy demo): t?o schema tr?c ti?p t? model, không c?n migration riêng.
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    if (dbProvider == "Sqlite")
+        db.Database.EnsureCreated();
+    else
+        db.Database.Migrate();
+}
 
 app.Run();
